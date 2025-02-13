@@ -1,0 +1,26 @@
+[out:xml];
+(
+  node["railway"="station"]["station"!~"subway"](around:100,55.82362385067106, -4.301690874075572);
+  node["railway"="station"]["station"="subway"](around:100,55.82362385067106, -4.301690874075572);
+  way["railway"="rail"](around:100,55.82362385067106, -4.301690874075572);
+  
+);
+// print results
+out meta;/*fixed by auto repair*/
+>;
+out meta qt;/*fixed by auto repair*/
+
+{{style:
+node[railway=station]{ 
+  text : name;
+  color: blue;
+  fill-color:blue;
+  fill-opacity:1.0;
+}
+node[station=subway]{
+  text: name; 
+  color: yellow;
+  fill-color:yellow;
+  fill-opacity:1.0;
+}
+}}

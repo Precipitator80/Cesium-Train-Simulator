@@ -1,0 +1,362 @@
+[
+  {
+    "type": "node",
+    "id": 3727609007,
+    "lat": 55.8238539,
+    "lon": -4.3014144,
+    "tags": {
+      "name": "Pollokshaws West",
+      "name:gd": "Pollokshaws an Iar",
+      "naptan:AtcoCode": "9100PLKSHWW",
+      "network": "National Rail",
+      "network:website": "https://www.nationalrail.co.uk/stations/pww/",
+      "network:wikidata": "Q26334",
+      "operator": "ScotRail",
+      "operator:website": "https://www.scotrail.co.uk/plan-your-journey/stations-and-facilities/pww",
+      "operator:wikidata": "Q18356161",
+      "public_transport": "station",
+      "railway": "station",
+      "ref:crs": "PWW",
+      "train": "yes",
+      "wheelchair": "no",
+      "wikidata": "Q7225728",
+      "wikipedia": "en:Pollokshaws West railway station"
+    }
+  },
+  {
+    "type": "way",
+    "id": 8073112,
+    "bounds": {
+      "minlat": 55.8214073,
+      "minlon": -4.304404,
+      "maxlat": 55.8228894,
+      "maxlon": -4.3024513
+    },
+    "nodes": [
+      60439370,
+      28843932,
+      28843934
+    ],
+    "geometry": [
+      {
+        "lat": 55.8214073,
+        "lon": -4.304404
+      },
+      {
+        "lat": 55.822144,
+        "lon": -4.3033316
+      },
+      {
+        "lat": 55.8228894,
+        "lon": -4.3024513
+      }
+    ],
+    "tags": {
+      "electrified": "contact_line",
+      "frequency": "50",
+      "gauge": "1435",
+      "name": "Glasgow Barrhead and Kilmarnock Line",
+      "passenger_lines": "2",
+      "railway": "rail",
+      "ref": "GBK",
+      "usage": "main",
+      "voltage": "25000"
+    }
+  },
+  {
+    "type": "way",
+    "id": 41558469,
+    "bounds": {
+      "minlat": 55.8238477,
+      "minlon": -4.3014561,
+      "maxlat": 55.8245448,
+      "maxlon": -4.3007649
+    },
+    "nodes": [
+      28843937,
+      12388167161,
+      28843939
+    ],
+    "geometry": [
+      {
+        "lat": 55.8238477,
+        "lon": -4.3014561
+      },
+      {
+        "lat": 55.8240525,
+        "lon": -4.3012465
+      },
+      {
+        "lat": 55.8245448,
+        "lon": -4.3007649
+      }
+    ],
+    "tags": {
+      "electrified": "contact_line",
+      "frequency": "50",
+      "gauge": "1435",
+      "name": "Glasgow Barrhead and Kilmarnock Line",
+      "passenger_lines": "2",
+      "railway": "rail",
+      "ref": "GBK",
+      "usage": "main",
+      "voltage": "25000"
+    }
+  },
+  {
+    "type": "way",
+    "id": 41558473,
+    "bounds": {
+      "minlat": 55.8229699,
+      "minlon": -4.3023613,
+      "maxlat": 55.8238477,
+      "maxlon": -4.3014561
+    },
+    "nodes": [
+      509678911,
+      12388167158,
+      1647704706,
+      12388167160,
+      8763758122,
+      28843937
+    ],
+    "geometry": [
+      {
+        "lat": 55.8229699,
+        "lon": -4.3023613
+      },
+      {
+        "lat": 55.8231635,
+        "lon": -4.3021456
+      },
+      {
+        "lat": 55.8232988,
+        "lon": -4.3020121
+      },
+      {
+        "lat": 55.823516,
+        "lon": -4.3017819
+      },
+      {
+        "lat": 55.8235627,
+        "lon": -4.3017338
+      },
+      {
+        "lat": 55.8238477,
+        "lon": -4.3014561
+      }
+    ],
+    "tags": {
+      "electrified": "contact_line",
+      "frequency": "50",
+      "gauge": "1435",
+      "name": "Glasgow Barrhead and Kilmarnock Line",
+      "passenger_lines": "2",
+      "railway": "rail",
+      "ref": "GBK",
+      "usage": "main",
+      "voltage": "25000"
+    }
+  },
+  {
+    "type": "way",
+    "id": 41558474,
+    "bounds": {
+      "minlat": 55.8228894,
+      "minlon": -4.3024513,
+      "maxlat": 55.8229699,
+      "maxlon": -4.3023613
+    },
+    "nodes": [
+      28843934,
+      509678911
+    ],
+    "geometry": [
+      {
+        "lat": 55.8228894,
+        "lon": -4.3024513
+      },
+      {
+        "lat": 55.8229699,
+        "lon": -4.3023613
+      }
+    ],
+    "tags": {
+      "bridge": "yes",
+      "bridge:name": "Pollockshaws Bowling Club Bridge",
+      "electrified": "contact_line",
+      "frequency": "50",
+      "gauge": "1435",
+      "layer": "1",
+      "name": "Glasgow Barrhead and Kilmarnock Line",
+      "passenger_lines": "2",
+      "railway": "rail",
+      "ref": "GBK",
+      "usage": "main",
+      "voltage": "25000"
+    }
+  },
+  {
+    "type": "way",
+    "id": 294823961,
+    "bounds": {
+      "minlat": 55.8238337,
+      "minlon": -4.301406,
+      "maxlat": 55.82453,
+      "maxlon": -4.3007174
+    },
+    "nodes": [
+      2984478943,
+      12388167162,
+      2984478015
+    ],
+    "geometry": [
+      {
+        "lat": 55.82453,
+        "lon": -4.3007174
+      },
+      {
+        "lat": 55.8240432,
+        "lon": -4.3011923
+      },
+      {
+        "lat": 55.8238337,
+        "lon": -4.301406
+      }
+    ],
+    "tags": {
+      "electrified": "contact_line",
+      "frequency": "50",
+      "gauge": "1435",
+      "name": "Glasgow Barrhead and Kilmarnock Line",
+      "passenger_lines": "2",
+      "railway": "rail",
+      "ref": "GBK",
+      "usage": "main",
+      "voltage": "25000"
+    }
+  },
+  {
+    "type": "way",
+    "id": 294823965,
+    "bounds": {
+      "minlat": 55.8228783,
+      "minlon": -4.3023891,
+      "maxlat": 55.8229599,
+      "maxlon": -4.3023057
+    },
+    "nodes": [
+      2984478941,
+      2984478940
+    ],
+    "geometry": [
+      {
+        "lat": 55.8229599,
+        "lon": -4.3023057
+      },
+      {
+        "lat": 55.8228783,
+        "lon": -4.3023891
+      }
+    ],
+    "tags": {
+      "bridge": "yes",
+      "bridge:name": "Pollockshaws Bowling Club Bridge",
+      "electrified": "contact_line",
+      "frequency": "50",
+      "gauge": "1435",
+      "layer": "1",
+      "name": "Glasgow Barrhead and Kilmarnock Line",
+      "passenger_lines": "2",
+      "railway": "rail",
+      "ref": "GBK",
+      "usage": "main",
+      "voltage": "25000"
+    }
+  },
+  {
+    "type": "way",
+    "id": 294823972,
+    "bounds": {
+      "minlat": 55.8213752,
+      "minlon": -4.3043411,
+      "maxlat": 55.8228783,
+      "maxlon": -4.3023891
+    },
+    "nodes": [
+      2984478940,
+      2984478939,
+      2984478937
+    ],
+    "geometry": [
+      {
+        "lat": 55.8228783,
+        "lon": -4.3023891
+      },
+      {
+        "lat": 55.8221217,
+        "lon": -4.3032725
+      },
+      {
+        "lat": 55.8213752,
+        "lon": -4.3043411
+      }
+    ],
+    "tags": {
+      "electrified": "contact_line",
+      "frequency": "50",
+      "gauge": "1435",
+      "name": "Glasgow Barrhead and Kilmarnock Line",
+      "passenger_lines": "2",
+      "railway": "rail",
+      "ref": "GBK",
+      "usage": "main",
+      "voltage": "25000"
+    }
+  },
+  {
+    "type": "way",
+    "id": 294823974,
+    "bounds": {
+      "minlat": 55.8229599,
+      "minlon": -4.3023057,
+      "maxlat": 55.8238337,
+      "maxlon": -4.301406
+    },
+    "nodes": [
+      2984478015,
+      2984478942,
+      12388167159,
+      2984478941
+    ],
+    "geometry": [
+      {
+        "lat": 55.8238337,
+        "lon": -4.301406
+      },
+      {
+        "lat": 55.8235521,
+        "lon": -4.3016876
+      },
+      {
+        "lat": 55.8231439,
+        "lon": -4.3021021
+      },
+      {
+        "lat": 55.8229599,
+        "lon": -4.3023057
+      }
+    ],
+    "tags": {
+      "electrified": "contact_line",
+      "frequency": "50",
+      "gauge": "1435",
+      "name": "Glasgow Barrhead and Kilmarnock Line",
+      "passenger_lines": "2",
+      "railway": "rail",
+      "ref": "GBK",
+      "usage": "main",
+      "voltage": "25000"
+    }
+  }
+]
