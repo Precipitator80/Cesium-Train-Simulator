@@ -4,19 +4,61 @@ using Unity.Mathematics;
 using System.Collections;
 using CesiumForUnity;
 using Newtonsoft.Json.Linq;
+using System.Threading.Tasks;
+using System.Collections.Generic;
 
+/// <summary>
+/// Queries Overpass Turbo and spawns objects using the response.
+/// </summary>
 public class OverpassQuerier : MonoBehaviour
 {
+    /// <summary>
+    /// Placeholder prefab to shows spawned railway objects.
+    /// </summary>
     public GameObject cuboidPrefab;
-    private CesiumGlobeAnchor anchor;
-    private CesiumGeoreference georeference;
-    private string json;
 
-    void Start()
+    /// <summary>
+    /// The tileset used to generate the terrain, sample heights and serve as a parent of spawned objects.
+    /// </summary>
+    public Cesium3DTileset tileset;
+
+    /// <summary>
+    /// The anchor used to spawn objects around. Should normally be a DynamicCamera.
+    /// </summary>
+    public CesiumGlobeAnchor anchor;
+
+    /// <summary>
+    /// A georeference to place spawned objects in the world around the anchor.
+    /// </summary>
+    public CesiumGeoreference georeference;
+
+    /// <summary>
+    /// A list of spawned objects used as a reference to make clearing objects easier.
+    /// </summary>
+    public List<GameObject> spawnedObjects = new();
+
+    /// <summary>
+    /// Clears any objects and then queries Overpass Turbo, spawning a new set of objects.
+    /// </summary>
+    public void TriggerQuery()
     {
-        anchor = GetComponent<CesiumGlobeAnchor>();
-        georeference = GetComponentInParent<CesiumGeoreference>();
+        ClearObjects();
         StartCoroutine(QueryOverpass());
+    }
+
+    /// <summary>
+    /// Clears all currently spawned objects.
+    /// </summary>
+    public void ClearObjects()
+    {
+        foreach (GameObject obj in spawnedObjects)
+        {
+            if (Application.isPlaying)
+                Destroy(obj);
+            else
+                DestroyImmediate(obj);
+        }
+        spawnedObjects.Clear();
     }
 
     IEnumerator QueryOverpass()
@@ -38,8 +80,7 @@ public class OverpassQuerier : MonoBehaviour
 
             if (webRequest.result == UnityWebRequest.Result.Success)
             {
-                json = webRequest.downloadHandler.text;
-                ProcessJson(json);
+                ProcessJson(webRequest.downloadHandler.text);
             }
             else
             {
@@ -63,7 +104,7 @@ public class OverpassQuerier : MonoBehaviour
             {
                 double lat = (double)element["lat"];
                 double lon = (double)element["lon"];
-                SpawnObject(lat, lon, tags);
+                StartCoroutine(SpawnObject(lat, lon, tags));
             }
             else if (type == "way")
             {
@@ -73,17 +114,30 @@ public class OverpassQuerier : MonoBehaviour
         }
     }
 
-    void SpawnObject(double lat, double lon, JObject tags)
+    IEnumerator SpawnObject(double lat, double lon, JObject tags)
     {
-        GameObject cuboid = Instantiate(cuboidPrefab, georeference.transform);
-        cuboid.SetActive(true);
-        CesiumGlobeAnchor cuboidAnchor = cuboid.AddComponent<CesiumGlobeAnchor>();
-        cuboidAnchor.longitudeLatitudeHeight = new double3(lon, lat, 80);
+        // Calculate the position of the object with the height sampled.
+        Task<CesiumSampleHeightResult> task = tileset.SampleHeightMostDetailed(new double3(lon, lat, 1.0));
+        yield return new WaitForTask(task);
+        CesiumSampleHeightResult result = task.Result;
+        if (result.sampleSuccess[0])
+        {
+            // Spawn the object, adding it to the tracked list of objects and activating it.
+            GameObject cuboid = Instantiate(cuboidPrefab, georeference.transform);
+            spawnedObjects.Add(cuboid);
+            cuboid.SetActive(true);
 
-        // Adjust scale for visibility
-        cuboid.transform.localScale = new Vector3(5, 5, 5);
+            // Set the position of the object using the sampled data.
+            CesiumGlobeAnchor cuboidAnchor = cuboid.AddComponent<CesiumGlobeAnchor>();
+            cuboidAnchor.longitudeLatitudeHeight = result.longitudeLatitudeHeightPositions[0];
 
-        Debug.Log($"Spawned object at {lat}, {lon} with tags: {tags}");
+            // Set the tileset as the parent to make spawned objects easier to track in the editor.
+            cuboid.transform.SetParent(tileset.transform, true);
+
+            // Adjust scale for visibility and print a notice to the console.
+            cuboid.transform.localScale = new Vector3(5, 5, 5);
+            Debug.Log($"Spawned object at {cuboidAnchor.longitudeLatitudeHeight} with tags: {tags}");
+        }
     }
 
     void SpawnWay(JArray geometry, JObject tags)
@@ -98,34 +152,45 @@ public class OverpassQuerier : MonoBehaviour
             double lat2 = (double)node2["lat"];
             double lon2 = (double)node2["lon"];
 
-            SpawnCuboidBetweenPoints(lat1, lon1, lat2, lon2);
+            StartCoroutine(SpawnCuboidBetweenPoints(lat1, lon1, lat2, lon2));
         }
 
         Debug.Log($"Spawned way with {geometry.Count} points and tags: {tags}");
     }
 
-    void SpawnCuboidBetweenPoints(double lat1, double lon1, double lat2, double lon2)
+    IEnumerator SpawnCuboidBetweenPoints(double lat1, double lon1, double lat2, double lon2)
     {
-        GameObject cuboid = Instantiate(cuboidPrefab, georeference.transform);
-        cuboid.SetActive(true);
-        CesiumGlobeAnchor cuboidAnchor = cuboid.AddComponent<CesiumGlobeAnchor>();
+        // Set position to midpoint of the two nodes.
+        double lon = (lon1 + lon2) / 2;
+        double lat = (lat1 + lat2) / 2;
 
+        // Calculate the position of the object with the height sampled.
+        Task<CesiumSampleHeightResult> task = tileset.SampleHeightMostDetailed(new double3(lon, lat, 1.0));
+        yield return new WaitForTask(task);
+        CesiumSampleHeightResult result = task.Result;
+        if (result.sampleSuccess[0])
+        {
+            // Spawn the object, adding it to the tracked list of objects and activating it.
+            GameObject cuboid = Instantiate(cuboidPrefab, georeference.transform);
+            spawnedObjects.Add(cuboid);
+            cuboid.SetActive(true);
 
+            // Set the position of the object using the sampled data.
+            CesiumGlobeAnchor cuboidAnchor = cuboid.AddComponent<CesiumGlobeAnchor>();
+            cuboidAnchor.longitudeLatitudeHeight = result.longitudeLatitudeHeightPositions[0];
+            cuboid.transform.SetParent(tileset.transform, true);
 
-        // Set position to midpoint of the two nodes
-        cuboidAnchor.longitudeLatitudeHeight = new double3(
-            (lon1 + lon2) / 2,
-            (lat1 + lat2) / 2,
-            80  // Assuming ground level, adjust if needed
-        );
+            // Calculate the rotation to align with the track direction.
+            float angle = Mathf.Atan2((float)(lon2 - lon1), (float)(lat2 - lat1)) * Mathf.Rad2Deg;
+            cuboid.transform.localRotation = Quaternion.Euler(0, angle, 0);
 
-        // Calculate rotation to align with track direction
-        float angle = Mathf.Atan2((float)(lon2 - lon1), (float)(lat2 - lat1)) * Mathf.Rad2Deg;
-        cuboid.transform.localRotation = Quaternion.Euler(0, angle, 0);
+            // Scale the cuboid to fit between the points (rough approximation).
+            float distance = CalculateDistance(lat1, lon1, lat2, lon2);
+            cuboid.transform.localScale = new Vector3(2, 2, distance);
 
-        // Scale cuboid to fit between points (rough approximation)
-        float distance = CalculateDistance(lat1, lon1, lat2, lon2);
-        cuboid.transform.localScale = new Vector3(2, 2, distance);
+            // Set the tileset as the parent to make spawned objects easier to track in the editor.
+            cuboid.transform.SetParent(tileset.transform, true);
+        }
     }
 
     float CalculateDistance(double lat1, double lon1, double lat2, double lon2)
