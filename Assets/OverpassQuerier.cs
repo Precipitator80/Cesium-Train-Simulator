@@ -181,8 +181,16 @@ public class OverpassQuerier : MonoBehaviour
             cuboid.transform.SetParent(tileset.transform, true);
 
             // Calculate the rotation to align with the track direction.
-            float angle = Mathf.Atan2((float)(lon2 - lon1), (float)(lat2 - lat1)) * Mathf.Rad2Deg;
-            cuboid.transform.localRotation = Quaternion.Euler(0, angle, 0);
+            // Convert lat/lon to Unity world positions for correct angle calculations.
+            Vector3 world1 = ToUnityPosition(georeference, lon1, lat1);
+            Vector3 world2 = ToUnityPosition(georeference, lon2, lat2);
+
+            // Compute direction and rotation.
+            Vector3 direction = (world2 - world1).normalized;
+            float angle = Mathf.Atan2(direction.x, direction.z) * Mathf.Rad2Deg;
+
+            // Apply rotation.
+            cuboid.transform.rotation = Quaternion.Euler(0, angle, 0); // adjust with -90f if needed
 
             // Scale the cuboid to fit between the points (rough approximation).
             float distance = CalculateDistance(lat1, lon1, lat2, lon2);
@@ -191,6 +199,13 @@ public class OverpassQuerier : MonoBehaviour
             // Set the tileset as the parent to make spawned objects easier to track in the editor.
             cuboid.transform.SetParent(tileset.transform, true);
         }
+    }
+
+    private Vector3 ToUnityPosition(CesiumGeoreference georeference, double lon, double lat, double height = 0)
+    {
+        double3 ecef = CesiumWgs84Ellipsoid.LongitudeLatitudeHeightToEarthCenteredEarthFixed(new double3(lon, lat, height));
+        double3 unityPos = georeference.TransformEarthCenteredEarthFixedPositionToUnity(ecef);
+        return new Vector3((float)unityPos.x, (float)unityPos.y, (float)unityPos.z);
     }
 
     float CalculateDistance(double lat1, double lon1, double lat2, double lon2)
