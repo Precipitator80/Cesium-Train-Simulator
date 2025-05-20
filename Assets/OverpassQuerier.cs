@@ -37,6 +37,11 @@ public class OverpassQuerier : MonoBehaviour
     /// </summary>
     public List<GameObject> spawnedObjects = new();
 
+    public List<long> stationIdsOrdered = new();
+    public List<long> trackIdsOrdered = new();
+    public Dictionary<long, JToken> stations = new();
+    public Dictionary<long, JToken> tracks = new();
+
     /// <summary>
     /// Clears any objects and then queries Overpass Turbo, spawning a new set of objects.
     /// </summary>
@@ -59,19 +64,33 @@ public class OverpassQuerier : MonoBehaviour
                 DestroyImmediate(obj);
         }
         spawnedObjects.Clear();
+        stationIdsOrdered.Clear();
+        trackIdsOrdered.Clear();
+        stations.Clear();
+        tracks.Clear();
     }
 
     IEnumerator QueryOverpass()
     {
-        string query = $@"[out:json];
-        (
-          node[""railway""=""station""][""station""!~""subway""](around:100,{anchor.longitudeLatitudeHeight.y},{anchor.longitudeLatitudeHeight.x});
-          node[""railway""=""station""][""station""=""subway""](around:100,{anchor.longitudeLatitudeHeight.y},{anchor.longitudeLatitudeHeight.x});
-          way[""railway""=""rail""](around:100,{anchor.longitudeLatitudeHeight.y},{anchor.longitudeLatitudeHeight.x});
-        );
+        // This query gets stations and tracks near the anchor.
+        // string query = $@"[out:json];
+        // (
+        //   node[""railway""=""station""][""station""!~""subway""](around:100,{anchor.longitudeLatitudeHeight.y},{anchor.longitudeLatitudeHeight.x});
+        //   node[""railway""=""station""][""station""=""subway""](around:100,{anchor.longitudeLatitudeHeight.y},{anchor.longitudeLatitudeHeight.x});
+        //   way[""railway""=""rail""](around:100,{anchor.longitudeLatitudeHeight.y},{anchor.longitudeLatitudeHeight.x});
+        // );
+        // out geom;";
+
+        // Populate the world with stations and tracks using a relation.
+        // This query should always get the relation first (stored in body), followed by geometry.
+        string query = $@"[out:json][timeout:25];
+        relation(11843297);
+        out body;
+		(._;>>;);
         out geom;";
 
         string encodedQuery = UnityWebRequest.EscapeURL(query);
+        Debug.Log(query); // Log what was queried.
         string url = "https://overpass-api.de/api/interpreter?data=" + encodedQuery;
 
         using (UnityWebRequest webRequest = UnityWebRequest.Get(url))
@@ -100,18 +119,44 @@ public class OverpassQuerier : MonoBehaviour
             string type = (string)element["type"];
             JObject tags = (JObject)element["tags"];
 
-            if (type == "node")
+            switch (type)
             {
-                double lat = (double)element["lat"];
-                double lon = (double)element["lon"];
-                StartCoroutine(SpawnObject(lat, lon, tags));
-            }
-            else if (type == "way")
-            {
-                JArray geometry = (JArray)element["geometry"];
-                SpawnWay(geometry, tags);
+                // If queried correctly, the relation should always be processed first.
+                case "relation":
+                    JArray members = (JArray)element["members"];
+                    Debug.Log(members);
+                    foreach (var member in members)
+                    {
+                        string memberType = (string)member["type"];
+                        string memberRole = (string)member["role"];
+                        long memberRef = (long)member["ref"];
+                        if (memberType == "node" && memberRole == "stop")
+                        {
+                            stationIdsOrdered.Add(memberRef);
+                        }
+                        else if (memberType == "way" && memberRole == "")
+                        {
+                            trackIdsOrdered.Add(memberRef);
+                        }
+                    }
+                    break;
+                // If the relation was processed first, then dictionary keys will already be set.
+                case "node":
+                    stations.Add((long)element["id"], element);
+                    double lat = (double)element["lat"];
+                    double lon = (double)element["lon"];
+                    StartCoroutine(SpawnObject(lat, lon, tags));
+                    break;
+                case "way":
+                    tracks.Add((long)element["id"], element);
+                    JArray geometry = (JArray)element["geometry"];
+                    SpawnWay(geometry, tags);
+                    break;
             }
         }
+
+        // Create a spline from the track pieces.
+        // TODO
     }
 
     IEnumerator SpawnObject(double lat, double lon, JObject tags)
