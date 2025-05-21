@@ -6,6 +6,7 @@ using CesiumForUnity;
 using Newtonsoft.Json.Linq;
 using System.Threading.Tasks;
 using System.Collections.Generic;
+using UnityEngine.Splines;
 
 /// <summary>
 /// Queries Overpass Turbo and spawns objects using the response.
@@ -145,18 +146,17 @@ public class OverpassQuerier : MonoBehaviour
                     stations.Add((long)element["id"], element);
                     double lat = (double)element["lat"];
                     double lon = (double)element["lon"];
-                    StartCoroutine(SpawnObject(lat, lon, tags));
+                    // StartCoroutine(SpawnObject(lat, lon, tags));
                     break;
                 case "way":
                     tracks.Add((long)element["id"], element);
                     JArray geometry = (JArray)element["geometry"];
-                    SpawnWay(geometry, tags);
+                    // SpawnWay(geometry, tags);
                     break;
             }
         }
 
-        // Create a spline from the track pieces.
-        // TODO
+        StartCoroutine(GenerateSplineWithTerrainHeights());
     }
 
     IEnumerator SpawnObject(double lat, double lon, JObject tags)
@@ -245,6 +245,40 @@ public class OverpassQuerier : MonoBehaviour
             cuboid.transform.SetParent(tileset.transform, true);
         }
     }
+
+    IEnumerator GenerateSplineWithTerrainHeights()
+    {
+        // Create a GameObject to hold the SplineContainer.
+        GameObject splineGameObject = new("Spline Container");
+        spawnedObjects.Add(splineGameObject);
+        var container = splineGameObject.AddComponent<SplineContainer>();
+        var spline = container.AddSpline();
+
+        // Add all of the tracks' nodes to the spline.
+        foreach (var id in trackIdsOrdered)
+        {
+            foreach (var coordinates in tracks[id]["geometry"])
+            {
+                // Sample height from the terrain.
+                double lat = (double)coordinates["lat"];
+                double lon = (double)coordinates["lon"];
+                Task<CesiumSampleHeightResult> task = tileset.SampleHeightMostDetailed(new double3(lon, lat, 1.0));
+                yield return new WaitForTask(task);
+                CesiumSampleHeightResult result = task.Result;
+                if (result.sampleSuccess[0])
+                {
+                    // Add a spline at the sampled position in Unity space.
+                    double3 sampledPos = result.longitudeLatitudeHeightPositions[0];
+                    Vector3 pos = ToUnityPosition(georeference, sampledPos[0], sampledPos[1], sampledPos[2]);
+                    spline.Add(new BezierKnot(new float3(pos.x, pos.y, pos.z)));
+                }
+            }
+        }
+
+        // Smoothen the spline.
+        spline.SetTangentMode(TangentMode.AutoSmooth);
+    }
+
 
     private Vector3 ToUnityPosition(CesiumGeoreference georeference, double lon, double lat, double height = 0)
     {
