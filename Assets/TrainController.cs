@@ -14,8 +14,9 @@ public class TrainController : MonoBehaviour
 
     /// <summary>
     /// The spline container holding the spline to move along.
+    /// Expose publicly to let the OverpassQuerier set the spline after querying.
     /// </summary>
-    [SerializeField] private SplineContainer splineContainer;
+    public SplineContainer splineContainer;
     /// <summary>
     /// A text field to display train statistics.
     /// </summary>

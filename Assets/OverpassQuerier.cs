@@ -252,7 +252,17 @@ public class OverpassQuerier : MonoBehaviour
         GameObject splineGameObject = new("Spline Container");
         spawnedObjects.Add(splineGameObject);
         var container = splineGameObject.AddComponent<SplineContainer>();
-        var spline = container.AddSpline();
+
+        // Add a globe anchor and set the georeference as the parent to keep the container's position accurate to the world.
+        splineGameObject.AddComponent<CesiumGlobeAnchor>();
+        splineGameObject.transform.SetParent(georeference.transform);
+
+        // Assign the spline container to the train controller.
+        var trainController = GetComponent<TrainController>();
+        if (trainController != null)
+        {
+            trainController.splineContainer = container;
+        }
 
         // Add all of the tracks' nodes to the spline.
         foreach (var id in trackIdsOrdered)
@@ -270,13 +280,13 @@ public class OverpassQuerier : MonoBehaviour
                     // Add a spline at the sampled position in Unity space.
                     double3 sampledPos = result.longitudeLatitudeHeightPositions[0];
                     Vector3 pos = ToUnityPosition(georeference, sampledPos[0], sampledPos[1], sampledPos[2]);
-                    spline.Add(new BezierKnot(new float3(pos.x, pos.y, pos.z)));
+                    container.Spline.Add(new BezierKnot(new float3(pos.x, pos.y, pos.z)));
                 }
             }
         }
 
         // Smoothen the spline.
-        spline.SetTangentMode(TangentMode.AutoSmooth);
+        container.Spline.SetTangentMode(TangentMode.AutoSmooth);
     }
 
 
