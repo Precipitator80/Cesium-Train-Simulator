@@ -38,6 +38,11 @@ public class OverpassQuerier : MonoBehaviour
     /// </summary>
     public List<GameObject> spawnedObjects = new();
 
+    /// <summary>
+    /// The ID of the relation to use to populate the world.
+    /// </summary>
+    public int relationID = 11843297;
+
     public List<long> stationIdsOrdered = new();
     public List<long> trackIdsOrdered = new();
     public Dictionary<long, JToken> stations = new();
@@ -57,6 +62,7 @@ public class OverpassQuerier : MonoBehaviour
     /// </summary>
     public void ClearObjects()
     {
+        StopAllCoroutines();
         foreach (GameObject obj in spawnedObjects)
         {
             if (Application.isPlaying)
@@ -83,10 +89,8 @@ public class OverpassQuerier : MonoBehaviour
         // out geom;";
 
         // Populate the world with stations and tracks using a relation.
-        // This query should always get the relation first (stored in body), followed by geometry.
         string query = $@"[out:json][timeout:25];
-        relation(11843297);
-        out body;
+        relation({relationID});
 		(._;>>;);
         out geom;";
 
@@ -115,6 +119,7 @@ public class OverpassQuerier : MonoBehaviour
         JArray elements = (JArray)jsonObject["elements"];
         Debug.Log(elements);
 
+        // Process query data.
         foreach (var element in elements)
         {
             string type = (string)element["type"];
@@ -122,7 +127,7 @@ public class OverpassQuerier : MonoBehaviour
 
             switch (type)
             {
-                // If queried correctly, the relation should always be processed first.
+                // Use relation data to determine spawn order.
                 case "relation":
                     JArray members = (JArray)element["members"];
                     Debug.Log(members);
@@ -156,6 +161,7 @@ public class OverpassQuerier : MonoBehaviour
             }
         }
 
+        // Generate the route after query data has been processed.
         StartCoroutine(GenerateSplineWithTerrainHeights());
     }
 
@@ -253,16 +259,15 @@ public class OverpassQuerier : MonoBehaviour
         spawnedObjects.Add(splineGameObject);
         var container = splineGameObject.AddComponent<SplineContainer>();
 
-        // Add a globe anchor and set the georeference as the parent to keep the container's position accurate to the world.
-        splineGameObject.AddComponent<CesiumGlobeAnchor>();
-        splineGameObject.transform.SetParent(georeference.transform);
-
         // Assign the spline container to the train controller.
         var trainController = GetComponent<TrainController>();
         if (trainController != null)
         {
             trainController.splineContainer = container;
         }
+
+        // Flag to update the origin to be at the spline.
+        bool setOrigin = false;
 
         // Add all of the tracks' nodes to the spline.
         foreach (var id in trackIdsOrdered)
@@ -277,8 +282,25 @@ public class OverpassQuerier : MonoBehaviour
                 CesiumSampleHeightResult result = task.Result;
                 if (result.sampleSuccess[0])
                 {
-                    // Add a spline at the sampled position in Unity space.
+                    // Get the sampled position.
                     double3 sampledPos = result.longitudeLatitudeHeightPositions[0];
+
+                    // Check whether the origin has been set yet.
+                    if (!setOrigin)
+                    {
+                        // Set the origin to just above the first part of the track and reset the position of the querier (usually attached to the camera).
+                        georeference.SetOriginLongitudeLatitudeHeight(sampledPos[0], sampledPos[1], sampledPos[2] + 3f);
+                        transform.position = Vector3.zero;
+
+                        // Add a globe anchor and set the georeference as the parent to keep the container's position accurate to the world.
+                        splineGameObject.AddComponent<CesiumGlobeAnchor>();
+                        splineGameObject.transform.SetParent(georeference.transform);
+
+                        // Update the flag to avoid updating the origin again.
+                        setOrigin = true;
+                    }
+
+                    // Add a knot at the sampled position in Unity space.
                     Vector3 pos = ToUnityPosition(georeference, sampledPos[0], sampledPos[1], sampledPos[2]);
                     container.Spline.Add(new BezierKnot(new float3(pos.x, pos.y, pos.z)));
                 }
