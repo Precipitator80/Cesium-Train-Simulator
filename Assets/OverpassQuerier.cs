@@ -7,6 +7,7 @@ using Newtonsoft.Json.Linq;
 using System.Threading.Tasks;
 using System.Collections.Generic;
 using UnityEngine.Splines;
+using System.Linq;
 
 /// <summary>
 /// Queries Overpass Turbo and spawns objects using the response.
@@ -266,49 +267,134 @@ public class OverpassQuerier : MonoBehaviour
             trainController.splineContainer = container;
         }
 
-        // Flag to update the origin to be at the spline.
-        bool setOrigin = false;
-
         // Add all of the tracks' nodes to the spline.
-        foreach (var id in trackIdsOrdered)
+        double3 lastSample = new();
+        List<JToken> unsmoothenedNodes = new();
+        for (int i = 0; i < trackIdsOrdered.Count; i++)
         {
-            foreach (var coordinates in tracks[id]["geometry"])
+            // Get the geometry of the current way.
+            var id = trackIdsOrdered[i];
+            var wayGeometry = (JArray)tracks[id]["geometry"];
+
+            // Skip this way if it does not have geometry.
+            if (wayGeometry == null || wayGeometry.Count() == 0)
             {
-                // Sample height from the terrain.
-                double lat = (double)coordinates["lat"];
-                double lon = (double)coordinates["lon"];
-                Task<CesiumSampleHeightResult> task = tileset.SampleHeightMostDetailed(new double3(lon, lat, 1.0));
-                yield return new WaitForTask(task);
-                CesiumSampleHeightResult result = task.Result;
-                if (result.sampleSuccess[0])
+                continue;
+            }
+
+            // Sample the starting node of the way, continuing to the next way if sampling failed.
+            var startCoordinates = wayGeometry[0];
+            double startLat = (double)startCoordinates["lat"];
+            double startLon = (double)startCoordinates["lon"];
+            Task<CesiumSampleHeightResult> task = tileset.SampleHeightMostDetailed(new double3(startLon, startLat, 1.0));
+            yield return new WaitForTask(task);
+            CesiumSampleHeightResult result = task.Result;
+            if (!result.sampleSuccess[0])
+            {
+                // Store the geometry of the way to be added to the spline later after height smoothing.
+                unsmoothenedNodes.AddRange(wayGeometry);
+                continue;
+            }
+
+            // Get the sample from the task result.
+            double3 currentSample = result.longitudeLatitudeHeightPositions[0];
+
+            // If the last sample has not been set yet, continue to the next way.
+            // When first setting the last sample, reset the origin using the sample.
+            if (lastSample.Equals(double3.zero))
+            {
+                // Store the geometry of the way to be added to the spline later after height smoothing.
+                unsmoothenedNodes.AddRange(wayGeometry);
+
+                // Set the current sample to be the last sample for the next loop.
+                lastSample = currentSample;
+
+                // Set the origin to just above the first sample and reset the position of the querier (usually attached to the camera).
+                georeference.SetOriginLongitudeLatitudeHeight(currentSample[0], currentSample[1], currentSample[2] + 3f);
+                transform.position = Vector3.zero;
+
+                // Add a globe anchor and set the georeference as the parent to keep the container's position accurate to the world.
+                splineGameObject.AddComponent<CesiumGlobeAnchor>();
+                splineGameObject.transform.SetParent(georeference.transform);
+
+                continue;
+            }
+
+            // Process the unsmoothened nodes from previous ways.
+            ProcessUnsmoothenedNodes(unsmoothenedNodes, container.Spline, lastSample, currentSample);
+
+            // Store the geometry of the way to be added to the spline later after height smoothing.
+            unsmoothenedNodes.AddRange(wayGeometry);
+
+            // Set the current sample to be the last sample for the next loop.
+            lastSample = currentSample;
+
+            // If this is the last way, sample the final node and process the last batch of nodes.
+            if (i == trackIdsOrdered.Count - 1)
+            {
+                // Sample the ending node of the way.
+                // Use a constant height if sampling failed.
+                // This is done as it cannot be guaranteed that the last two samples were across the same distance as the last way.
+                var endCoordinates = wayGeometry[wayGeometry.Count - 1];
+                double endLat = (double)endCoordinates["lat"];
+                double endLon = (double)endCoordinates["lon"];
+                Task<CesiumSampleHeightResult> endTask = tileset.SampleHeightMostDetailed(new double3(endLon, endLat, 1.0));
+                yield return new WaitForTask(endTask);
+                CesiumSampleHeightResult endResult = endTask.Result;
+                if (endResult.sampleSuccess[0])
                 {
-                    // Get the sampled position.
-                    double3 sampledPos = result.longitudeLatitudeHeightPositions[0];
-
-                    // Check whether the origin has been set yet.
-                    if (!setOrigin)
-                    {
-                        // Set the origin to just above the first part of the track and reset the position of the querier (usually attached to the camera).
-                        georeference.SetOriginLongitudeLatitudeHeight(sampledPos[0], sampledPos[1], sampledPos[2] + 3f);
-                        transform.position = Vector3.zero;
-
-                        // Add a globe anchor and set the georeference as the parent to keep the container's position accurate to the world.
-                        splineGameObject.AddComponent<CesiumGlobeAnchor>();
-                        splineGameObject.transform.SetParent(georeference.transform);
-
-                        // Update the flag to avoid updating the origin again.
-                        setOrigin = true;
-                    }
-
-                    // Add a knot at the sampled position in Unity space.
-                    Vector3 pos = ToUnityPosition(georeference, sampledPos[0], sampledPos[1], sampledPos[2]);
-                    container.Spline.Add(new BezierKnot(new float3(pos.x, pos.y, pos.z)));
+                    currentSample = result.longitudeLatitudeHeightPositions[0];
                 }
+
+                ProcessUnsmoothenedNodes(unsmoothenedNodes, container.Spline, lastSample, currentSample);
             }
         }
 
         // Smoothen the spline.
         container.Spline.SetTangentMode(TangentMode.AutoSmooth);
+    }
+
+    private void ProcessUnsmoothenedNodes(List<JToken> nodes, Spline spline, double3 startSample, double3 endSample)
+    {
+        // Get the length of the way(s) in order to get the position of each node.
+        List<Vector3> nodeWorldPositions = new()
+            {
+                ToUnityPosition(georeference, (double)nodes[0]["lon"], (double)nodes[0]["lat"])
+            };
+        List<float> distances = new();
+        double totalDistance = 0;
+        for (int j = 1; j < nodes.Count(); j++)
+        {
+            // Calculate the world position.
+            Vector3 currentNodeWorldPos = ToUnityPosition(georeference, (double)nodes[j]["lon"], (double)nodes[j]["lat"]);
+            nodeWorldPositions.Add(currentNodeWorldPos);
+
+            // Calculate the distance and add it to the total.
+            float distance = Vector3.Distance(nodeWorldPositions[j - 1], currentNodeWorldPos);
+            distances.Add(distance);
+            totalDistance += distance;
+        }
+
+        // Calculate the start and end positions.
+        Vector3 startPos = ToUnityPosition(georeference, startSample[0], startSample[1], startSample[2]);
+        Vector3 endPos = ToUnityPosition(georeference, endSample[0], endSample[1], endSample[2]);
+
+        // Smoothen all unsmoothed nodes and add them to the spline.
+        // Add the starting node to the spline.
+        spline.Add(new BezierKnot(new float3(startPos.x, startPos.y, startPos.z)));
+        for (int j = 1; j < nodes.Count(); j++)
+        {
+            // Use linear interpolation between the start and end sample heights to estimate the height of the node.
+            float t = (float)(distances[j - 1] / totalDistance);
+            float height = Mathf.Lerp(startPos.y, endPos.y, t);
+
+            // Add the smoothened node to the spline.
+            Vector3 pos = new(nodeWorldPositions[j].x, height, nodeWorldPositions[j].z);
+            spline.Add(new BezierKnot(new float3(pos.x, pos.y, pos.z)));
+        }
+
+        // Clear the list after having processed all the previous ways.
+        nodes.Clear();
     }
 
 
