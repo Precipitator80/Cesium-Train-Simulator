@@ -7,6 +7,7 @@ using Newtonsoft.Json.Linq;
 using System.Threading.Tasks;
 using System.Collections.Generic;
 using UnityEngine.Splines;
+using System.Linq;
 
 /// <summary>
 /// Queries Overpass Turbo and spawns objects using the response.
@@ -42,6 +43,12 @@ public class OverpassQuerier : MonoBehaviour
     /// The ID of the relation to use to populate the world.
     /// </summary>
     public int relationID = 11843297;
+
+    /// <summary>
+    /// The number of nodes to spawn per sample.
+    /// The lower the node count, the higher the accuracy, with 1 giving maximum accuracy.
+    /// </summary>
+    public int nodesPerSample = 5;
 
     public List<long> stationIdsOrdered = new();
     public List<long> trackIdsOrdered = new();
@@ -104,7 +111,7 @@ public class OverpassQuerier : MonoBehaviour
 
             if (webRequest.result == UnityWebRequest.Result.Success)
             {
-                ProcessJson(webRequest.downloadHandler.text);
+                yield return new WaitForTask(ProcessJson(webRequest.downloadHandler.text));
             }
             else
             {
@@ -113,7 +120,7 @@ public class OverpassQuerier : MonoBehaviour
         }
     }
 
-    void ProcessJson(string jsonString)
+    async Task ProcessJson(string jsonString)
     {
         JObject jsonObject = JObject.Parse(jsonString);
         JArray elements = (JArray)jsonObject["elements"];
@@ -162,7 +169,7 @@ public class OverpassQuerier : MonoBehaviour
         }
 
         // Generate the route after query data has been processed.
-        StartCoroutine(GenerateSplineWithTerrainHeights());
+        await GenerateSplineWithTerrainHeights();
     }
 
     IEnumerator SpawnObject(double lat, double lon, JObject tags)
@@ -252,7 +259,7 @@ public class OverpassQuerier : MonoBehaviour
         }
     }
 
-    IEnumerator GenerateSplineWithTerrainHeights()
+    async Task GenerateSplineWithTerrainHeights()
     {
         // Create a GameObject to hold the SplineContainer.
         GameObject splineGameObject = new("Spline Container");
@@ -266,49 +273,149 @@ public class OverpassQuerier : MonoBehaviour
             trainController.splineContainer = container;
         }
 
+        // Create a queue of all nodes along the entire track.
+        Queue<JToken> unsmoothedNodes = new();
+        for (int i = 0; i < trackIdsOrdered.Count; i++)
+        {
+            // Get the geometry of the current way.
+            var id = trackIdsOrdered[i];
+            var wayGeometry = (JArray)tracks[id]["geometry"];
+
+            // Skip this way if it does not have geometry.
+            if (wayGeometry == null || wayGeometry.Count() == 0)
+            {
+                continue;
+            }
+
+            // Store the geometry of the way to be added to the spline later after height smoothing.
+            // Do not store the end node until the last way as this is the same as the start node of the next way.
+            int jLimit = i == trackIdsOrdered.Count - 1 ? wayGeometry.Count() : wayGeometry.Count() - 1;
+            for (int j = 0; j < jLimit; j++)
+            {
+                unsmoothedNodes.Enqueue(wayGeometry[j]);
+            }
+        }
+
         // Flag to update the origin to be at the spline.
         bool setOrigin = false;
 
-        // Add all of the tracks' nodes to the spline.
-        foreach (var id in trackIdsOrdered)
+        // Process and add all of the track's nodes to the spline.
+        List<JToken> nodesInBatch = new();
+        double3 lastSample = new();
+        while (unsmoothedNodes.Count > 0)
         {
-            foreach (var coordinates in tracks[id]["geometry"])
+            // Get a sample of the first unprocessed node.
+            var result = await tileset.SampleHeightMostDetailed(CoordinatesNodeToDouble3(unsmoothedNodes.Peek()));
+            if (!result.sampleSuccess[0])
             {
-                // Sample height from the terrain.
-                double lat = (double)coordinates["lat"];
-                double lon = (double)coordinates["lon"];
-                Task<CesiumSampleHeightResult> task = tileset.SampleHeightMostDetailed(new double3(lon, lat, 1.0));
-                yield return new WaitForTask(task);
-                CesiumSampleHeightResult result = task.Result;
+                // If unsuccessful, skip to the next few nodes to sample.
+                // Possible TODO for future: Skipping nodes without changing the start sample logic means skipped nodes may have poor smoothing.
+                for (int j = 0; j < nodesPerSample && unsmoothedNodes.Count > 0; j++)
+                {
+                    nodesInBatch.Add(unsmoothedNodes.Dequeue());
+                }
+                continue;
+            }
+            double3 currentSample = result.longitudeLatitudeHeightPositions[0];
+
+            // Check whether the origin has been set yet.
+            if (!setOrigin)
+            {
+                // Set the origin to just above the first sample and reset the position of the querier (usually attached to the camera).
+                georeference.SetOriginLongitudeLatitudeHeight(currentSample[0], currentSample[1], currentSample[2] + 3f);
+                transform.position = Vector3.zero;
+
+                // Add a globe anchor and set the georeference as the parent to keep the container's position accurate to the world.
+                splineGameObject.AddComponent<CesiumGlobeAnchor>();
+                splineGameObject.transform.SetParent(georeference.transform);
+
+                // Update the flag to avoid updating the origin again.
+                setOrigin = true;
+            }
+
+            // If the last sample has been set, process all unsmoothed nodes.
+            if (!lastSample.Equals(double3.zero))
+            {
+                ProcessUnsmoothedNodes(nodesInBatch, container.Spline, lastSample, currentSample, false);
+            }
+
+            // Get the next few nodes to process.
+            for (int j = 0; j < nodesPerSample && unsmoothedNodes.Count > 0; j++)
+            {
+                nodesInBatch.Add(unsmoothedNodes.Dequeue());
+            }
+
+            // Set the current sample to be the last sample for the next loop.
+            lastSample = currentSample;
+
+            // If this is the final batch, try to sample the end node and process the final few nodes.
+            if (unsmoothedNodes.Count == 0)
+            {
+                result = await tileset.SampleHeightMostDetailed(CoordinatesNodeToDouble3(nodesInBatch[^1]));
                 if (result.sampleSuccess[0])
                 {
-                    // Get the sampled position.
-                    double3 sampledPos = result.longitudeLatitudeHeightPositions[0];
-
-                    // Check whether the origin has been set yet.
-                    if (!setOrigin)
-                    {
-                        // Set the origin to just above the first part of the track and reset the position of the querier (usually attached to the camera).
-                        georeference.SetOriginLongitudeLatitudeHeight(sampledPos[0], sampledPos[1], sampledPos[2] + 3f);
-                        transform.position = Vector3.zero;
-
-                        // Add a globe anchor and set the georeference as the parent to keep the container's position accurate to the world.
-                        splineGameObject.AddComponent<CesiumGlobeAnchor>();
-                        splineGameObject.transform.SetParent(georeference.transform);
-
-                        // Update the flag to avoid updating the origin again.
-                        setOrigin = true;
-                    }
-
-                    // Add a knot at the sampled position in Unity space.
-                    Vector3 pos = ToUnityPosition(georeference, sampledPos[0], sampledPos[1], sampledPos[2]);
-                    container.Spline.Add(new BezierKnot(new float3(pos.x, pos.y, pos.z)));
+                    currentSample = result.longitudeLatitudeHeightPositions[0];
                 }
+                ProcessUnsmoothedNodes(nodesInBatch, container.Spline, lastSample, currentSample, true);
             }
         }
 
         // Smoothen the spline.
         container.Spline.SetTangentMode(TangentMode.AutoSmooth);
+    }
+
+    private double3 CoordinatesNodeToDouble3(JToken node)
+    {
+        return new double3((double)node["lon"], (double)node["lat"], 1.0);
+    }
+
+    private void ProcessUnsmoothedNodes(List<JToken> nodes, Spline spline, double3 startSample, double3 endSample, bool endIncluded)
+    {
+        // Calculate the start and end positions.
+        Vector3 startPos = ToUnityPosition(georeference, startSample[0], startSample[1], startSample[2]);
+        Vector3 endPos = ToUnityPosition(georeference, endSample[0], endSample[1], endSample[2]);
+
+        // Get the length of the way(s) in order to get the position of each node.
+        List<Vector3> nodeWorldPositions = new()
+            {
+                ToUnityPosition(georeference, (double)nodes[0]["lon"], (double)nodes[0]["lat"])
+            };
+        List<double> cumulativeDistances = new();
+        double totalDistance = 0;
+        for (int j = 1; j < nodes.Count(); j++)
+        {
+            // Calculate the world position.
+            Vector3 currentNodeWorldPos = ToUnityPosition(georeference, (double)nodes[j]["lon"], (double)nodes[j]["lat"]);
+            nodeWorldPositions.Add(currentNodeWorldPos);
+
+            // Calculate the distance from the last point and add it to the total.
+            float distance = Vector3.Distance(nodeWorldPositions[j - 1], currentNodeWorldPos);
+            totalDistance += distance;
+            cumulativeDistances.Add(totalDistance);
+        }
+
+        // Add the distance to the end position if not in the nodes to give a full range to linearly interpolate across.
+        if (!endIncluded)
+        {
+            totalDistance += Vector3.Distance(nodeWorldPositions[^1], endPos);
+        }
+
+        // Smoothen all unsmoothed nodes and add them to the spline.
+        // Add the starting node to the spline.
+        spline.Add(new BezierKnot(new float3(startPos.x, startPos.y, startPos.z)));
+        for (int j = 1; j < nodes.Count(); j++)
+        {
+            // Use linear interpolation between the start and end sample heights to estimate the height of the node.
+            float t = (float)(cumulativeDistances[j - 1] / totalDistance);
+            float height = Mathf.Lerp(startPos.y, endPos.y, t);
+
+            // Add the smoothed node to the spline.
+            Vector3 pos = new(nodeWorldPositions[j].x, height, nodeWorldPositions[j].z);
+            spline.Add(new BezierKnot(new float3(pos.x, pos.y, pos.z)));
+        }
+
+        // Clear the list after having processed all the previous ways.
+        nodes.Clear();
     }
 
 
