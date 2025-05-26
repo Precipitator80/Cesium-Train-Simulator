@@ -284,21 +284,21 @@ public class OverpassQuerier : MonoBehaviour
                 CesiumSampleHeightResult result = task.Result;
                 if (result.sampleSuccess[0])
                 {
- 		    // Get the sampled position.
+                    // Get the sampled position.
                     double3 sampledPos = result.longitudeLatitudeHeightPositions[0];
 
-		    // Check whether the origin has been set yet.
+                    // Check whether the origin has been set yet.
                     if (!setOrigin)
                     {
-		        // Set the origin to just above the first part of the track and reset the position of the querier (usually attached to the camera).
+                        // Set the origin to just above the first part of the track and reset the position of the querier (usually attached to the camera).
                         georeference.SetOriginLongitudeLatitudeHeight(sampledPos[0], sampledPos[1], sampledPos[2] + 3f);
                         transform.position = Vector3.zero;
 
-			// Add a globe anchor and set the georeference as the parent to keep the container's position accurate to the world.
+                        // Add a globe anchor and set the georeference as the parent to keep the container's position accurate to the world.
                         splineGameObject.AddComponent<CesiumGlobeAnchor>();
                         splineGameObject.transform.SetParent(georeference.transform);
 
-			// Update the flag to avoid updating the origin again.
+                        // Update the flag to avoid updating the origin again.
                         setOrigin = true;
                     }
 
