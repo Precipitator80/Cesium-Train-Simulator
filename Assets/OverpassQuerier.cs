@@ -269,7 +269,9 @@ public class OverpassQuerier : MonoBehaviour
         // Flag to update the origin to be at the spline.
         bool setOrigin = false;
 
-        // Add all of the tracks' nodes to the spline.
+        // Sample every node first so that smoothing algorithms can be applied.
+        List<double3> sampledPositions = new();
+
         foreach (var id in trackIdsOrdered)
         {
             foreach (var coordinates in tracks[id]["geometry"])
@@ -300,15 +302,114 @@ public class OverpassQuerier : MonoBehaviour
                         setOrigin = true;
                     }
 
-                    // Add a knot at the sampled position in Unity space.
-                    Vector3 pos = ToUnityPosition(georeference, sampledPos[0], sampledPos[1], sampledPos[2]);
-                    container.Spline.Add(new BezierKnot(new float3(pos.x, pos.y, pos.z)));
+                    // Add the sampled position to be used in smoothing later.
+                    sampledPositions.Add(sampledPos);
                 }
             }
         }
 
-        // Smoothen the spline.
+        // Apply smoothing algorithms to the sampled heights.
+        List<double3> smoothed = SmoothTrackHeights(sampledPositions);
+
+        // Add smoothed knots to the spline.
+        foreach (double3 posLLH in smoothed)
+        {
+            Vector3 pos = ToUnityPosition(georeference, posLLH.x, posLLH.y, posLLH.z);
+            container.Spline.Add(new BezierKnot(new float3(pos.x, pos.y, pos.z)));
+        }
+
         container.Spline.SetTangentMode(TangentMode.AutoSmooth);
+    }
+
+
+    /// <summary>
+    /// Smooth the sampled track heights by detecting grade anomalies and
+    /// linearly interpolating suspect ranges. Single-node spikes are also
+    /// handled by a quick median check.
+    /// </summary>
+    private List<double3> SmoothTrackHeights(List<double3> points)
+    {
+        if (points.Count < 3)
+            return points;
+
+        // Precompute cumulative distances along the track.
+        List<float> cumulative = new(points.Count);
+        cumulative.Add(0f);
+        for (int i = 1; i < points.Count; i++)
+        {
+            float dist = CalculateDistance(points[i - 1].y, points[i - 1].x, points[i].y, points[i].x);
+            cumulative.Add(cumulative[i - 1] + dist);
+        }
+
+        // Compute grade between consecutive nodes.
+        List<float> grade = new(points.Count - 1);
+        for (int i = 0; i < points.Count - 1; i++)
+        {
+            float rise = (float)(points[i + 1].z - points[i].z);
+            float run = cumulative[i + 1] - cumulative[i];
+            grade.Add(run > 0f ? rise / run : 0f);
+        }
+
+        // Flag nodes where grade changes abruptly.
+        bool[] anomaly = new bool[points.Count];
+        const float gradeThreshold = 0.05f; // Roughly 5% grade jump.
+        for (int i = 1; i < grade.Count; i++)
+        {
+            if (Mathf.Abs(grade[i] - grade[i - 1]) > gradeThreshold)
+            {
+                anomaly[i] = true;
+            }
+        }
+
+        // Handle single-node outliers by replacing their height with the
+        // height midway between neighbours.
+        List<double3> result = new(points);
+        for (int i = 1; i < points.Count - 1; i++)
+        {
+            if (anomaly[i] && !anomaly[i - 1] && !anomaly[i + 1])
+            {
+                double mid = 0.5 * (points[i - 1].z + points[i + 1].z);
+                result[i] = new double3(points[i].x, points[i].y, mid);
+                anomaly[i] = false; // already handled
+            }
+        }
+
+        // Interpolate longer anomalistic sequences.
+        int index = 0;
+        while (index < points.Count)
+        {
+            if (!anomaly[index])
+            {
+                index++;
+                continue;
+            }
+
+            int start = index;
+            while (index < points.Count && anomaly[index])
+            {
+                index++;
+            }
+            int end = Mathf.Min(index, points.Count - 1);
+
+            // Use the last good node before start and the first good node after
+            // the anomaly to interpolate heights. Skip if boundaries invalid.
+            if (start == 0 || end >= points.Count)
+                continue;
+
+            double hStart = result[start - 1].z;
+            double hEnd = result[end].z;
+            float dStart = cumulative[start - 1];
+            float dEnd = cumulative[end];
+
+            for (int j = start; j < end; j++)
+            {
+                float t = (cumulative[j] - dStart) / (dEnd - dStart);
+                double h = hStart + (hEnd - hStart) * t;
+                result[j] = new double3(points[j].x, points[j].y, h);
+            }
+        }
+
+        return result;
     }
 
 
