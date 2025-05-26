@@ -50,6 +50,12 @@ public class OverpassQuerier : MonoBehaviour
     public Dictionary<long, JToken> tracks = new();
 
     /// <summary>
+    /// Number of nodes to skip between height samples.
+    /// A value of 1 means every node will be sampled.
+    /// </summary>
+    public int nodesPerSample = 5;
+
+    /// <summary>
     /// Clears any objects and then queries Overpass Turbo, spawning a new set of objects.
     /// </summary>
     public void TriggerQuery()
@@ -270,83 +276,67 @@ public class OverpassQuerier : MonoBehaviour
         // Add all of the tracks' nodes to the spline.
         double3 lastSample = new();
         List<JToken> unsmoothenedNodes = new();
+        int nodeIndex = 0;
         for (int i = 0; i < trackIdsOrdered.Count; i++)
         {
-            // Get the geometry of the current way.
             var id = trackIdsOrdered[i];
             var wayGeometry = (JArray)tracks[id]["geometry"];
 
-            // Skip this way if it does not have geometry.
             if (wayGeometry == null || wayGeometry.Count() == 0)
             {
                 continue;
             }
 
-            // Sample the starting node of the way, continuing to the next way if sampling failed.
-            var startCoordinates = wayGeometry[0];
-            double startLat = (double)startCoordinates["lat"];
-            double startLon = (double)startCoordinates["lon"];
-            Task<CesiumSampleHeightResult> task = tileset.SampleHeightMostDetailed(new double3(startLon, startLat, 1.0));
-            yield return new WaitForTask(task);
-            CesiumSampleHeightResult result = task.Result;
-            if (!result.sampleSuccess[0])
+            bool lastWay = i == trackIdsOrdered.Count - 1;
+
+            for (int j = 0; j < wayGeometry.Count; j++)
             {
-                // Store the geometry of the way to be added to the spline later after height smoothing.
-                unsmoothenedNodes.AddRange(wayGeometry);
-                continue;
-            }
+                var node = wayGeometry[j];
+                bool isFinalNode = lastWay && j == wayGeometry.Count - 1;
 
-            // Get the sample from the task result.
-            double3 currentSample = result.longitudeLatitudeHeightPositions[0];
+                unsmoothenedNodes.Add(node);
 
-            // If the last sample has not been set yet, continue to the next way.
-            // When first setting the last sample, reset the origin using the sample.
-            if (lastSample.Equals(double3.zero))
-            {
-                // Store the geometry of the way to be added to the spline later after height smoothing.
-                unsmoothenedNodes.AddRange(wayGeometry);
-
-                // Set the current sample to be the last sample for the next loop.
-                lastSample = currentSample;
-
-                // Set the origin to just above the first sample and reset the position of the querier (usually attached to the camera).
-                georeference.SetOriginLongitudeLatitudeHeight(currentSample[0], currentSample[1], currentSample[2] + 3f);
-                transform.position = Vector3.zero;
-
-                // Add a globe anchor and set the georeference as the parent to keep the container's position accurate to the world.
-                splineGameObject.AddComponent<CesiumGlobeAnchor>();
-                splineGameObject.transform.SetParent(georeference.transform);
-
-                continue;
-            }
-
-            // Process the unsmoothened nodes from previous ways.
-            ProcessUnsmoothenedNodes(unsmoothenedNodes, container.Spline, lastSample, currentSample);
-
-            // Store the geometry of the way to be added to the spline later after height smoothing.
-            unsmoothenedNodes.AddRange(wayGeometry);
-
-            // Set the current sample to be the last sample for the next loop.
-            lastSample = currentSample;
-
-            // If this is the last way, sample the final node and process the last batch of nodes.
-            if (i == trackIdsOrdered.Count - 1)
-            {
-                // Sample the ending node of the way.
-                // Use a constant height if sampling failed.
-                // This is done as it cannot be guaranteed that the last two samples were across the same distance as the last way.
-                var endCoordinates = wayGeometry[wayGeometry.Count - 1];
-                double endLat = (double)endCoordinates["lat"];
-                double endLon = (double)endCoordinates["lon"];
-                Task<CesiumSampleHeightResult> endTask = tileset.SampleHeightMostDetailed(new double3(endLon, endLat, 1.0));
-                yield return new WaitForTask(endTask);
-                CesiumSampleHeightResult endResult = endTask.Result;
-                if (endResult.sampleSuccess[0])
+                if (nodeIndex % nodesPerSample != 0 && !isFinalNode)
                 {
-                    currentSample = result.longitudeLatitudeHeightPositions[0];
+                    nodeIndex++;
+                    continue;
+                }
+
+                double lat = (double)node["lat"];
+                double lon = (double)node["lon"];
+                Task<CesiumSampleHeightResult> task = tileset.SampleHeightMostDetailed(new double3(lon, lat, 1.0));
+                yield return new WaitForTask(task);
+                CesiumSampleHeightResult result = task.Result;
+                if (!result.sampleSuccess[0])
+                {
+                    nodeIndex++;
+                    continue;
+                }
+
+                double3 currentSample = result.longitudeLatitudeHeightPositions[0];
+
+                if (lastSample.Equals(double3.zero))
+                {
+                    lastSample = currentSample;
+                    georeference.SetOriginLongitudeLatitudeHeight(currentSample[0], currentSample[1], currentSample[2] + 3f);
+                    transform.position = Vector3.zero;
+                    splineGameObject.AddComponent<CesiumGlobeAnchor>();
+                    splineGameObject.transform.SetParent(georeference.transform);
+                    unsmoothenedNodes.Clear();
+                    unsmoothenedNodes.Add(node);
+                    nodeIndex++;
+                    continue;
                 }
 
                 ProcessUnsmoothenedNodes(unsmoothenedNodes, container.Spline, lastSample, currentSample);
+                lastSample = currentSample;
+                unsmoothenedNodes.Clear();
+                if (!isFinalNode)
+                {
+                    unsmoothenedNodes.Add(node);
+                }
+
+                nodeIndex++;
             }
         }
 
