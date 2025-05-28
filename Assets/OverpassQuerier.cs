@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using System.Collections.Generic;
 using UnityEngine.Splines;
 using System.Linq;
+using System.Threading;
 
 /// <summary>
 /// Queries Overpass Turbo and spawns objects using the response.
@@ -50,10 +51,27 @@ public class OverpassQuerier : MonoBehaviour
     /// </summary>
     public int nodesPerSample = 5;
 
+    /// <summary>
+    /// The angle in degrees above which points sampled in the world are considered to be anomalous.
+    /// </summary>
+    public float gradeDegreeLimit = 6f;
+
+    /// <summary>
+    /// Anomalous positions where the grade is above the degree limit.
+    /// </summary>
+    public HashSet<Vector3> anomalousPositions = new();
+
     public List<long> stationIdsOrdered = new();
     public List<long> trackIdsOrdered = new();
     public Dictionary<long, JToken> stations = new();
     public Dictionary<long, JToken> tracks = new();
+
+    /// <summary>
+    /// Cancellation token source used to cancel running async functions.
+    /// Token is created at start and passed through to all async functions.
+    /// Async functions then check the token at specified points in runtime.
+    /// </summary>
+    private CancellationTokenSource queryCancellationToken;
 
     /// <summary>
     /// Clears any objects and then queries Overpass Turbo, spawning a new set of objects.
@@ -61,7 +79,8 @@ public class OverpassQuerier : MonoBehaviour
     public void TriggerQuery()
     {
         ClearObjects();
-        StartCoroutine(QueryOverpass());
+        queryCancellationToken = new CancellationTokenSource();
+        StartCoroutine(QueryOverpass(queryCancellationToken.Token));
     }
 
     /// <summary>
@@ -70,6 +89,11 @@ public class OverpassQuerier : MonoBehaviour
     public void ClearObjects()
     {
         StopAllCoroutines();
+        queryCancellationToken?.Cancel();
+        queryCancellationToken?.Dispose();
+        queryCancellationToken = null;
+        anomalousPositions.Clear();
+
         foreach (GameObject obj in spawnedObjects)
         {
             if (Application.isPlaying)
@@ -84,7 +108,7 @@ public class OverpassQuerier : MonoBehaviour
         tracks.Clear();
     }
 
-    IEnumerator QueryOverpass()
+    IEnumerator QueryOverpass(CancellationToken token)
     {
         // This query gets stations and tracks near the anchor.
         // string query = $@"[out:json];
@@ -111,7 +135,7 @@ public class OverpassQuerier : MonoBehaviour
 
             if (webRequest.result == UnityWebRequest.Result.Success)
             {
-                yield return new WaitForTask(ProcessJson(webRequest.downloadHandler.text));
+                yield return new WaitForTask(ProcessJson(webRequest.downloadHandler.text, token));
             }
             else
             {
@@ -120,7 +144,7 @@ public class OverpassQuerier : MonoBehaviour
         }
     }
 
-    async Task ProcessJson(string jsonString)
+    async Task ProcessJson(string jsonString, CancellationToken token)
     {
         JObject jsonObject = JObject.Parse(jsonString);
         JArray elements = (JArray)jsonObject["elements"];
@@ -169,7 +193,7 @@ public class OverpassQuerier : MonoBehaviour
         }
 
         // Generate the route after query data has been processed.
-        await GenerateSplineWithTerrainHeights();
+        await GenerateSplineWithTerrainHeights(token);
     }
 
     IEnumerator SpawnObject(double lat, double lon, JObject tags)
@@ -259,7 +283,7 @@ public class OverpassQuerier : MonoBehaviour
         }
     }
 
-    async Task GenerateSplineWithTerrainHeights()
+    async Task GenerateSplineWithTerrainHeights(CancellationToken token)
     {
         // Create a GameObject to hold the SplineContainer.
         GameObject splineGameObject = new("Spline Container");
@@ -304,6 +328,8 @@ public class OverpassQuerier : MonoBehaviour
         double3 lastSample = new();
         while (unsmoothedNodes.Count > 0)
         {
+            if (token.IsCancellationRequested) return;
+
             // Get a sample of the first unprocessed node.
             var result = await tileset.SampleHeightMostDetailed(CoordinatesNodeToDouble3(unsmoothedNodes.Peek()));
             if (!result.sampleSuccess[0])
@@ -334,9 +360,10 @@ public class OverpassQuerier : MonoBehaviour
             }
 
             // If the last sample has been set, process all unsmoothed nodes.
+            var smoothingSuccess = true; // Default to true to allow sample update when last sample has not yet been set.
             if (!lastSample.Equals(double3.zero))
             {
-                ProcessUnsmoothedNodes(nodesInBatch, container.Spline, lastSample, currentSample, false);
+                smoothingSuccess = ProcessUnsmoothedNodes(nodesInBatch, container.Spline, lastSample, currentSample, false);
             }
 
             // Get the next few nodes to process.
@@ -345,8 +372,17 @@ public class OverpassQuerier : MonoBehaviour
                 nodesInBatch.Add(unsmoothedNodes.Dequeue());
             }
 
-            // Set the current sample to be the last sample for the next loop.
-            lastSample = currentSample;
+            // If nodes could not be smoothed and there are still nodes left, skip to the next sample.
+            // Do not update the last sample on smoothing failure in order to carry forward to last successful sample.
+            if (!smoothingSuccess)
+            {
+                if (unsmoothedNodes.Count > 0) { continue; }
+            }
+            else
+            {
+                // Set the current sample to be the last sample for the next loop.
+                lastSample = currentSample;
+            }
 
             // If this is the final batch, try to sample the end node and process the final few nodes.
             if (unsmoothedNodes.Count == 0)
@@ -369,7 +405,7 @@ public class OverpassQuerier : MonoBehaviour
         return new double3((double)node["lon"], (double)node["lat"], 1.0);
     }
 
-    private void ProcessUnsmoothedNodes(List<JToken> nodes, Spline spline, double3 startSample, double3 endSample, bool endIncluded)
+    private bool ProcessUnsmoothedNodes(List<JToken> nodes, Spline spline, double3 startSample, double3 endSample, bool endIncluded)
     {
         // Calculate the start and end positions.
         Vector3 startPos = ToUnityPosition(georeference, startSample[0], startSample[1], startSample[2]);
@@ -378,7 +414,7 @@ public class OverpassQuerier : MonoBehaviour
         // Get the length of the way(s) in order to get the position of each node.
         List<Vector3> nodeWorldPositions = new()
             {
-                ToUnityPosition(georeference, (double)nodes[0]["lon"], (double)nodes[0]["lat"])
+                ToUnityPosition(georeference, startSample[0], startSample[1])
             };
         List<double> cumulativeDistances = new();
         double totalDistance = 0;
@@ -397,7 +433,22 @@ public class OverpassQuerier : MonoBehaviour
         // Add the distance to the end position if not in the nodes to give a full range to linearly interpolate across.
         if (!endIncluded)
         {
-            totalDistance += Vector3.Distance(nodeWorldPositions[^1], endPos);
+            totalDistance += Vector3.Distance(nodeWorldPositions[^1], ToUnityPosition(georeference, endSample[0], endSample[1]));
+        }
+
+        // Calculate the slope to find anomalous points.
+        // Any slopes above the specified limit are anomalous.
+        var totalHeight = endPos.y - startPos.y;
+        var slopeDeg = Mathf.Rad2Deg * Mathf.Asin((float)(totalHeight / totalDistance));
+        if (Mathf.Abs(slopeDeg) > gradeDegreeLimit)
+        {
+            Debug.Log($"Suspicious slope of {slopeDeg} degrees found between {startPos:F2} and {endPos:F2} (hypotenuse = {totalDistance}, opposite = {totalHeight})!");
+            anomalousPositions.Add(transform.InverseTransformPoint(startPos));
+            anomalousPositions.Add(transform.InverseTransformPoint(endPos));
+
+            // Skip this sample if there are more nodes left to sample from.
+            // Return false to indicate smoothing failure.
+            if (!endIncluded) { return false; }
         }
 
         // Smoothen all unsmoothed nodes and add them to the spline.
@@ -416,8 +467,10 @@ public class OverpassQuerier : MonoBehaviour
 
         // Clear the list after having processed all the previous ways.
         nodes.Clear();
-    }
 
+        // Return true to indicate smoothing success.
+        return true;
+    }
 
     private Vector3 ToUnityPosition(CesiumGeoreference georeference, double lon, double lat, double height = 0)
     {
@@ -436,5 +489,16 @@ public class OverpassQuerier : MonoBehaviour
                 Mathf.Sin((float)dLon / 2) * Mathf.Sin((float)dLon / 2);
         var c = 2 * Mathf.Atan2(Mathf.Sqrt(a), Mathf.Sqrt(1 - a));
         return (float)(R * c * 1000); // Convert to meters
+    }
+
+    void OnDrawGizmos()
+    {
+        // Draw spheres around any anomalous positions.
+        Gizmos.color = Color.red;
+        foreach (var localPos in anomalousPositions)
+        {
+            Vector3 worldPos = transform.TransformPoint(localPos);
+            Gizmos.DrawWireSphere(worldPos, 3f);
+        }
     }
 }
