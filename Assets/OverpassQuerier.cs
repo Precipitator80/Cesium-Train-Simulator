@@ -360,9 +360,10 @@ public class OverpassQuerier : MonoBehaviour
             }
 
             // If the last sample has been set, process all unsmoothed nodes.
+            var smoothingSuccess = true; // Default to true to allow sample update when last sample has not yet been set.
             if (!lastSample.Equals(double3.zero))
             {
-                ProcessUnsmoothedNodes(nodesInBatch, container.Spline, lastSample, currentSample, false);
+                smoothingSuccess = ProcessUnsmoothedNodes(nodesInBatch, container.Spline, lastSample, currentSample, false);
             }
 
             // Get the next few nodes to process.
@@ -371,8 +372,17 @@ public class OverpassQuerier : MonoBehaviour
                 nodesInBatch.Add(unsmoothedNodes.Dequeue());
             }
 
-            // Set the current sample to be the last sample for the next loop.
-            lastSample = currentSample;
+            // If nodes could not be smoothed and there are still nodes left, skip to the next sample.
+            // Do not update the last sample on smoothing failure in order to carry forward to last successful sample.
+            if (!smoothingSuccess)
+            {
+                if (unsmoothedNodes.Count > 0) { continue; }
+            }
+            else
+            {
+                // Set the current sample to be the last sample for the next loop.
+                lastSample = currentSample;
+            }
 
             // If this is the final batch, try to sample the end node and process the final few nodes.
             if (unsmoothedNodes.Count == 0)
@@ -395,7 +405,7 @@ public class OverpassQuerier : MonoBehaviour
         return new double3((double)node["lon"], (double)node["lat"], 1.0);
     }
 
-    private void ProcessUnsmoothedNodes(List<JToken> nodes, Spline spline, double3 startSample, double3 endSample, bool endIncluded)
+    private bool ProcessUnsmoothedNodes(List<JToken> nodes, Spline spline, double3 startSample, double3 endSample, bool endIncluded)
     {
         // Calculate the start and end positions.
         Vector3 startPos = ToUnityPosition(georeference, startSample[0], startSample[1], startSample[2]);
@@ -435,6 +445,10 @@ public class OverpassQuerier : MonoBehaviour
             Debug.Log($"Suspicious slope of {slopeDeg} degrees found between {startPos:F2} and {endPos:F2} (hypotenuse = {totalDistance}, opposite = {totalHeight})!");
             anomalousPositions.Add(transform.InverseTransformPoint(startPos));
             anomalousPositions.Add(transform.InverseTransformPoint(endPos));
+
+            // Skip this sample if there are more nodes left to sample from.
+            // Return false to indicate smoothing failure.
+            if (!endIncluded) { return false; }
         }
 
         // Smoothen all unsmoothed nodes and add them to the spline.
@@ -453,6 +467,9 @@ public class OverpassQuerier : MonoBehaviour
 
         // Clear the list after having processed all the previous ways.
         nodes.Clear();
+
+        // Return true to indicate smoothing success.
+        return true;
     }
 
     private Vector3 ToUnityPosition(CesiumGeoreference georeference, double lon, double lat, double height = 0)
