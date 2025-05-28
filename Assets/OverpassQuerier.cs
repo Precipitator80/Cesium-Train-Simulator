@@ -378,7 +378,7 @@ public class OverpassQuerier : MonoBehaviour
         // Get the length of the way(s) in order to get the position of each node.
         List<Vector3> nodeWorldPositions = new()
             {
-                ToUnityPosition(georeference, (double)nodes[0]["lon"], (double)nodes[0]["lat"])
+                ToUnityPosition(georeference, startSample[0], startSample[1])
             };
         List<double> cumulativeDistances = new();
         double totalDistance = 0;
@@ -397,7 +397,7 @@ public class OverpassQuerier : MonoBehaviour
         // Add the distance to the end position if not in the nodes to give a full range to linearly interpolate across.
         if (!endIncluded)
         {
-            totalDistance += Vector3.Distance(nodeWorldPositions[^1], endPos);
+            totalDistance += Vector3.Distance(nodeWorldPositions[^1], ToUnityPosition(georeference, endSample[0], endSample[1]));
         }
 
         // Smoothen all unsmoothed nodes and add them to the spline.
