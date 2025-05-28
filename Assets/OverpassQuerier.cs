@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using System.Collections.Generic;
 using UnityEngine.Splines;
 using System.Linq;
+using System.Threading;
 
 /// <summary>
 /// Queries Overpass Turbo and spawns objects using the response.
@@ -56,12 +57,20 @@ public class OverpassQuerier : MonoBehaviour
     public Dictionary<long, JToken> tracks = new();
 
     /// <summary>
+    /// Cancellation token source used to cancel running async functions.
+    /// Token is created at start and passed through to all async functions.
+    /// Async functions then check the token at specified points in runtime.
+    /// </summary>
+    private CancellationTokenSource queryCancellationToken;
+
+    /// <summary>
     /// Clears any objects and then queries Overpass Turbo, spawning a new set of objects.
     /// </summary>
     public void TriggerQuery()
     {
         ClearObjects();
-        StartCoroutine(QueryOverpass());
+        queryCancellationToken = new CancellationTokenSource();
+        StartCoroutine(QueryOverpass(queryCancellationToken.Token));
     }
 
     /// <summary>
@@ -70,6 +79,10 @@ public class OverpassQuerier : MonoBehaviour
     public void ClearObjects()
     {
         StopAllCoroutines();
+        queryCancellationToken?.Cancel();
+        queryCancellationToken?.Dispose();
+        queryCancellationToken = null;
+
         foreach (GameObject obj in spawnedObjects)
         {
             if (Application.isPlaying)
@@ -84,7 +97,7 @@ public class OverpassQuerier : MonoBehaviour
         tracks.Clear();
     }
 
-    IEnumerator QueryOverpass()
+    IEnumerator QueryOverpass(CancellationToken token)
     {
         // This query gets stations and tracks near the anchor.
         // string query = $@"[out:json];
@@ -111,7 +124,7 @@ public class OverpassQuerier : MonoBehaviour
 
             if (webRequest.result == UnityWebRequest.Result.Success)
             {
-                yield return new WaitForTask(ProcessJson(webRequest.downloadHandler.text));
+                yield return new WaitForTask(ProcessJson(webRequest.downloadHandler.text, token));
             }
             else
             {
@@ -120,7 +133,7 @@ public class OverpassQuerier : MonoBehaviour
         }
     }
 
-    async Task ProcessJson(string jsonString)
+    async Task ProcessJson(string jsonString, CancellationToken token)
     {
         JObject jsonObject = JObject.Parse(jsonString);
         JArray elements = (JArray)jsonObject["elements"];
@@ -169,7 +182,7 @@ public class OverpassQuerier : MonoBehaviour
         }
 
         // Generate the route after query data has been processed.
-        await GenerateSplineWithTerrainHeights();
+        await GenerateSplineWithTerrainHeights(token);
     }
 
     IEnumerator SpawnObject(double lat, double lon, JObject tags)
@@ -259,7 +272,7 @@ public class OverpassQuerier : MonoBehaviour
         }
     }
 
-    async Task GenerateSplineWithTerrainHeights()
+    async Task GenerateSplineWithTerrainHeights(CancellationToken token)
     {
         // Create a GameObject to hold the SplineContainer.
         GameObject splineGameObject = new("Spline Container");
@@ -304,6 +317,8 @@ public class OverpassQuerier : MonoBehaviour
         double3 lastSample = new();
         while (unsmoothedNodes.Count > 0)
         {
+            if (token.IsCancellationRequested) return;
+
             // Get a sample of the first unprocessed node.
             var result = await tileset.SampleHeightMostDetailed(CoordinatesNodeToDouble3(unsmoothedNodes.Peek()));
             if (!result.sampleSuccess[0])
