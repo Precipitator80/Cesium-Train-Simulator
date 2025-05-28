@@ -51,6 +51,16 @@ public class OverpassQuerier : MonoBehaviour
     /// </summary>
     public int nodesPerSample = 5;
 
+    /// <summary>
+    /// The angle in degrees above which points sampled in the world are considered to be anomalous.
+    /// </summary>
+    public float gradeDegreeLimit = 6f;
+
+    /// <summary>
+    /// Anomalous positions where the grade is above the degree limit.
+    /// </summary>
+    public HashSet<Vector3> anomalousPositions = new();
+
     public List<long> stationIdsOrdered = new();
     public List<long> trackIdsOrdered = new();
     public Dictionary<long, JToken> stations = new();
@@ -82,6 +92,7 @@ public class OverpassQuerier : MonoBehaviour
         queryCancellationToken?.Cancel();
         queryCancellationToken?.Dispose();
         queryCancellationToken = null;
+        anomalousPositions.Clear();
 
         foreach (GameObject obj in spawnedObjects)
         {
@@ -415,6 +426,17 @@ public class OverpassQuerier : MonoBehaviour
             totalDistance += Vector3.Distance(nodeWorldPositions[^1], ToUnityPosition(georeference, endSample[0], endSample[1]));
         }
 
+        // Calculate the slope to find anomalous points.
+        // Any slopes above the specified limit are anomalous.
+        var totalHeight = endPos.y - startPos.y;
+        var slopeDeg = Mathf.Rad2Deg * Mathf.Asin((float)(totalHeight / totalDistance));
+        if (Mathf.Abs(slopeDeg) > gradeDegreeLimit)
+        {
+            Debug.Log($"Suspicious slope of {slopeDeg} degrees found between {startPos:F2} and {endPos:F2} (hypotenuse = {totalDistance}, opposite = {totalHeight})!");
+            anomalousPositions.Add(transform.InverseTransformPoint(startPos));
+            anomalousPositions.Add(transform.InverseTransformPoint(endPos));
+        }
+
         // Smoothen all unsmoothed nodes and add them to the spline.
         // Add the starting node to the spline.
         spline.Add(new BezierKnot(new float3(startPos.x, startPos.y, startPos.z)));
@@ -433,7 +455,6 @@ public class OverpassQuerier : MonoBehaviour
         nodes.Clear();
     }
 
-
     private Vector3 ToUnityPosition(CesiumGeoreference georeference, double lon, double lat, double height = 0)
     {
         double3 ecef = CesiumWgs84Ellipsoid.LongitudeLatitudeHeightToEarthCenteredEarthFixed(new double3(lon, lat, height));
@@ -451,5 +472,16 @@ public class OverpassQuerier : MonoBehaviour
                 Mathf.Sin((float)dLon / 2) * Mathf.Sin((float)dLon / 2);
         var c = 2 * Mathf.Atan2(Mathf.Sqrt(a), Mathf.Sqrt(1 - a));
         return (float)(R * c * 1000); // Convert to meters
+    }
+
+    void OnDrawGizmos()
+    {
+        // Draw spheres around any anomalous positions.
+        Gizmos.color = Color.red;
+        foreach (var localPos in anomalousPositions)
+        {
+            Vector3 worldPos = transform.TransformPoint(localPos);
+            Gizmos.DrawWireSphere(worldPos, 3f);
+        }
     }
 }
