@@ -298,12 +298,14 @@ public class OverpassQuerier : MonoBehaviour
         }
 
         // Create a queue of all nodes along the entire track.
-        Queue<JToken> unsmoothedNodes = new();
+        Queue<WayNode> unsmoothedNodes = new();
+        bool lastWasTunnel = false;
         for (int i = 0; i < trackIdsOrdered.Count; i++)
         {
             // Get the geometry of the current way.
             var id = trackIdsOrdered[i];
-            var wayGeometry = (JArray)tracks[id]["geometry"];
+            var way = tracks[id];
+            var wayGeometry = (JArray)way["geometry"];
 
             // Skip this way if it does not have geometry.
             if (wayGeometry == null || wayGeometry.Count() == 0)
@@ -311,27 +313,43 @@ public class OverpassQuerier : MonoBehaviour
                 continue;
             }
 
+            // Determine if the way is a tunnel from the tags.
+            bool isTunnel = way["tags"]?["tunnel"]?.ToString() == "yes";
+
             // Store the geometry of the way to be added to the spline later after height smoothing.
             // Do not store the end node until the last way as this is the same as the start node of the next way.
             int jLimit = i == trackIdsOrdered.Count - 1 ? wayGeometry.Count() : wayGeometry.Count() - 1;
             for (int j = 0; j < jLimit; j++)
             {
-                unsmoothedNodes.Enqueue(wayGeometry[j]);
+                var node = wayGeometry[j];
+                double lat = (double)node["lat"];
+                double lon = (double)node["lon"];
+                // Mark both tunnel nodes and the tunnel exit node as tunnels.
+                unsmoothedNodes.Enqueue(new WayNode(lat, lon, isTunnel || j == 0 && lastWasTunnel));
             }
+            lastWasTunnel = isTunnel;
         }
 
         // Flag to update the origin to be at the spline.
         bool setOrigin = false;
 
         // Process and add all of the track's nodes to the spline.
-        List<JToken> nodesInBatch = new();
+        List<WayNode> nodesInBatch = new();
         double3 lastSample = new();
         while (unsmoothedNodes.Count > 0)
         {
             if (token.IsCancellationRequested) return;
 
+            // Skip samples of tunnel nodes.
+            var currentNode = unsmoothedNodes.Peek();
+            if (currentNode.IsTunnel)
+            {
+                nodesInBatch.Add(unsmoothedNodes.Dequeue());
+                continue;
+            }
+
             // Get a sample of the first unprocessed node.
-            var result = await tileset.SampleHeightMostDetailed(CoordinatesNodeToDouble3(unsmoothedNodes.Peek()));
+            var result = await tileset.SampleHeightMostDetailed(CoordinatesNodeToDouble3(currentNode));
             if (!result.sampleSuccess[0])
             {
                 // If unsuccessful, skip to the next few nodes to sample.
@@ -400,12 +418,12 @@ public class OverpassQuerier : MonoBehaviour
         container.Spline.SetTangentMode(TangentMode.AutoSmooth);
     }
 
-    private double3 CoordinatesNodeToDouble3(JToken node)
+    private double3 CoordinatesNodeToDouble3(WayNode node)
     {
-        return new double3((double)node["lon"], (double)node["lat"], 1.0);
+        return new double3(node.Lon, node.Lat, 1.0);
     }
 
-    private bool ProcessUnsmoothedNodes(List<JToken> nodes, Spline spline, double3 startSample, double3 endSample, bool endIncluded)
+    private bool ProcessUnsmoothedNodes(List<WayNode> nodes, Spline spline, double3 startSample, double3 endSample, bool endIncluded)
     {
         // Calculate the start and end positions.
         Vector3 startPos = ToUnityPosition(georeference, startSample[0], startSample[1], startSample[2]);
@@ -421,7 +439,7 @@ public class OverpassQuerier : MonoBehaviour
         for (int j = 1; j < nodes.Count(); j++)
         {
             // Calculate the world position.
-            Vector3 currentNodeWorldPos = ToUnityPosition(georeference, (double)nodes[j]["lon"], (double)nodes[j]["lat"]);
+            Vector3 currentNodeWorldPos = ToUnityPosition(georeference, nodes[j].Lon, nodes[j].Lat);
             nodeWorldPositions.Add(currentNodeWorldPos);
 
             // Calculate the distance from the last point and add it to the total.
@@ -501,4 +519,23 @@ public class OverpassQuerier : MonoBehaviour
             Gizmos.DrawWireSphere(worldPos, 3f);
         }
     }
+}
+
+/// <summary>
+/// Defines the node of a way both via its position and whether it is a tunnel or not.
+/// </summary>
+public readonly struct WayNode
+{
+    public WayNode(double lat, double lon, bool tunnel = false)
+    {
+        Lat = lat;
+        Lon = lon;
+        IsTunnel = tunnel;
+    }
+
+    public double Lat { get; }
+    public double Lon { get; }
+    public bool IsTunnel { get; }
+
+    public override string ToString() => $"{(IsTunnel ? "Tunnel " : "")}Node at ({Lat}, {Lon})";
 }
