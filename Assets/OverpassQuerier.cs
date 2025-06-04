@@ -57,6 +57,11 @@ public class OverpassQuerier : MonoBehaviour
     public float gradeDegreeLimit = 6f;
 
     /// <summary>
+    /// The change in grade above which points sampled in the world are considered to be anomalous.
+    /// </summary>
+    public float gradeDegreeChangeLimit = 1f;
+
+    /// <summary>
     /// Anomalous positions where the grade is above the degree limit.
     /// </summary>
     public HashSet<Vector3> anomalousPositions = new();
@@ -336,6 +341,7 @@ public class OverpassQuerier : MonoBehaviour
         // Process and add all of the track's nodes to the spline.
         List<WayNode> nodesInBatch = new();
         double3 lastSample = new();
+        float? lastSlopeDeg = null; // Track slope across samples to aid smoothing.
         while (unsmoothedNodes.Count > 0)
         {
             if (token.IsCancellationRequested) return;
@@ -378,10 +384,11 @@ public class OverpassQuerier : MonoBehaviour
             }
 
             // If the last sample has been set, process all unsmoothed nodes.
-            var smoothingSuccess = true; // Default to true to allow sample update when last sample has not yet been set.
+            // The current slope is returned if successful. Otherwise, null is returned.
+            float? currentSlopeDeg = 0f;
             if (!lastSample.Equals(double3.zero))
             {
-                smoothingSuccess = ProcessUnsmoothedNodes(nodesInBatch, container.Spline, lastSample, currentSample, false);
+                currentSlopeDeg = ProcessUnsmoothedNodes(nodesInBatch, container.Spline, lastSample, currentSample, lastSlopeDeg, false);
             }
 
             // Get the next few nodes to process.
@@ -392,7 +399,7 @@ public class OverpassQuerier : MonoBehaviour
 
             // If nodes could not be smoothed and there are still nodes left, skip to the next sample.
             // Do not update the last sample on smoothing failure in order to carry forward to last successful sample.
-            if (!smoothingSuccess)
+            if (!currentSlopeDeg.HasValue)
             {
                 if (unsmoothedNodes.Count > 0) { continue; }
             }
@@ -400,6 +407,7 @@ public class OverpassQuerier : MonoBehaviour
             {
                 // Set the current sample to be the last sample for the next loop.
                 lastSample = currentSample;
+                lastSlopeDeg = currentSlopeDeg;
             }
 
             // If this is the final batch, try to sample the end node and process the final few nodes.
@@ -410,7 +418,7 @@ public class OverpassQuerier : MonoBehaviour
                 {
                     currentSample = result.longitudeLatitudeHeightPositions[0];
                 }
-                ProcessUnsmoothedNodes(nodesInBatch, container.Spline, lastSample, currentSample, true);
+                ProcessUnsmoothedNodes(nodesInBatch, container.Spline, lastSample, currentSample, lastSlopeDeg, true);
             }
         }
 
@@ -423,7 +431,7 @@ public class OverpassQuerier : MonoBehaviour
         return new double3(node.Lon, node.Lat, 1.0);
     }
 
-    private bool ProcessUnsmoothedNodes(List<WayNode> nodes, Spline spline, double3 startSample, double3 endSample, bool endIncluded)
+    private float? ProcessUnsmoothedNodes(List<WayNode> nodes, Spline spline, double3 startSample, double3 endSample, float? lastSlopeDeg, bool endIncluded)
     {
         // Calculate the start and end positions.
         Vector3 startPos = ToUnityPosition(georeference, startSample[0], startSample[1], startSample[2]);
@@ -458,15 +466,15 @@ public class OverpassQuerier : MonoBehaviour
         // Any slopes above the specified limit are anomalous.
         var totalHeight = endPos.y - startPos.y;
         var slopeDeg = Mathf.Rad2Deg * Mathf.Asin((float)(totalHeight / totalDistance));
-        if (Mathf.Abs(slopeDeg) > gradeDegreeLimit)
+        if (Mathf.Abs(slopeDeg) > gradeDegreeLimit || lastSlopeDeg.HasValue && Mathf.Abs(lastSlopeDeg.Value - slopeDeg) > gradeDegreeChangeLimit)
         {
             Debug.Log($"Suspicious slope of {slopeDeg} degrees found between {startPos:F2} and {endPos:F2} (hypotenuse = {totalDistance}, opposite = {totalHeight})!");
             anomalousPositions.Add(transform.InverseTransformPoint(startPos));
             anomalousPositions.Add(transform.InverseTransformPoint(endPos));
 
             // Skip this sample if there are more nodes left to sample from.
-            // Return false to indicate smoothing failure.
-            if (!endIncluded) { return false; }
+            // Return null to indicate smoothing failure.
+            if (!endIncluded) { return null; }
         }
 
         // Smoothen all unsmoothed nodes and add them to the spline.
@@ -486,8 +494,8 @@ public class OverpassQuerier : MonoBehaviour
         // Clear the list after having processed all the previous ways.
         nodes.Clear();
 
-        // Return true to indicate smoothing success.
-        return true;
+        // Return the slope to indicate smoothing success.
+        return slopeDeg;
     }
 
     private Vector3 ToUnityPosition(CesiumGeoreference georeference, double lon, double lat, double height = 0)
